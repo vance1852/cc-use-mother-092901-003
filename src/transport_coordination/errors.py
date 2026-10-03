@@ -33,3 +33,17 @@ class ConflictError(DomainError):
 
     code = "conflict"
     status = 409
+
+
+class AccountClosedError(DomainError):
+    """收入已经关账，迟到事件或调整不能直接改写。"""
+
+    code = "account_closed"
+    status = 409
+
+
+class BillingStateError(DomainError):
+    """行程当前状态不允许该操作，例如尚未生成计费事实。"""
+
+    code = "billing_state"
+    status = 409

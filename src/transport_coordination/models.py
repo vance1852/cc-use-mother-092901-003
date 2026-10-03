@@ -49,3 +49,4 @@ class WriteReceipt:
     resource_type: str
     resource_id: str
     replayed: bool
+    response: dict[str, Any] | None = None

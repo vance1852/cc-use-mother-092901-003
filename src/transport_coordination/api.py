@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .errors import DomainError, ValidationError
+from .billing import BillingService
 from .service import DomainService
 from .storage import Database
 
@@ -48,6 +49,58 @@ def route(service: DomainService, method: str, path: str, body: dict[str, Any] |
             query = parse_qs(parsed.query)
             after = int(query.get("after_sequence", ["0"])[0])
             return 200, {"items": service.audit_events(after)}
+
+        # 收费政策执行与清算
+        if method == "POST" and parsed.path == "/segments":
+            receipt = service.register_segment(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/policies":
+            receipt = service.publish_policy(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/policies/withdraw":
+            receipt = service.withdraw_policy(actor_id=actor_id, **body)
+            return 200, receipt.__dict__
+        if method == "GET" and parsed.path == "/policies":
+            query = parse_qs(parsed.query)
+            include_withdrawn = query.get("include_withdrawn", ["true"])[0].lower() != "false"
+            return 200, {"items": service.list_policies(include_withdrawn=include_withdrawn)}
+        if method == "POST" and parsed.path == "/trip-events":
+            receipt = service.record_trip_event(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/adjustments":
+            receipt = service.register_adjustment(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/disputes":
+            receipt = service.open_dispute(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/disputes/resolve":
+            receipt = service.resolve_dispute(actor_id=actor_id, **body)
+            return 200, receipt.__dict__
+        if method == "POST" and parsed.path == "/settlement-periods":
+            receipt = service.create_period(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "POST" and parsed.path == "/settlement-periods/close":
+            receipt = service.close_period(actor_id=actor_id, **body)
+            return 200, receipt.__dict__
+        if method == "POST" and parsed.path == "/settlements":
+            receipt = service.settle_trip(actor_id=actor_id, **body)
+            return 200 if receipt.replayed else 201, receipt.__dict__
+        if method == "GET" and parsed.path.startswith("/trips/"):
+            parts = [part for part in parsed.path.split("/") if part]
+            query = parse_qs(parsed.query)
+            if len(parts) == 3 and parts[2] == "explain":
+                return 200, service.explain_trip(parts[1])
+            if len(parts) == 3 and parts[2] == "replay":
+                as_of = query.get("as_of", [""])[0]
+                if not as_of:
+                    raise ValidationError("as_of 不能为空")
+                return 200, service.replay_trip(parts[1], as_of)
+        if method == "GET" and parsed.path == "/reconciliation":
+            query = parse_qs(parsed.query)
+            period_id = query.get("period_id", [""])[0]
+            if not period_id:
+                raise ValidationError("period_id 不能为空")
+            return 200, service.operator_reconciliation(period_id)
         return 404, {"error": "route_not_found", "message": "接口不存在"}
     except DomainError as exc:
         return exc.status, {"error": exc.code, "message": str(exc)}
@@ -99,7 +152,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
     database = Database(args.database)
-    Handler.service = DomainService(database)
+    Handler.service = BillingService(database)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     try:
         server.serve_forever()
